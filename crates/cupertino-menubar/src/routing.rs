@@ -284,6 +284,8 @@ fn menu_action(slot: &SlotKey, item: ItemId, cx: &Context) -> Option<Action> {
         MenuSource::Gtk(props) => Some(Action::Request(Request::ActivateGtk {
             props,
             item: target.0,
+            // the component asks for the activation token before it sends the request
+            token: None,
         })),
         MenuSource::Synthetic => None,
     }

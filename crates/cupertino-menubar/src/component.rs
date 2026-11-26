@@ -141,6 +141,8 @@ pub enum Message {
         launch: u64,
         token: Option<String>,
     },
+    /// The activation token for activating an item of a GMenuModel exporter, which the activation hands over.
+    GtkToken(Box<crate::source::GtkMenuProps>, i32, Option<String>),
     /// A task that answers nothing ended.
     Done,
 }
@@ -671,6 +673,11 @@ impl Application for MenuBar {
                 model.complete_launch(launch, token);
                 Vec::new()
             }
+            Message::GtkToken(props, item, token) => model.request(Request::ActivateGtk {
+                props: *props,
+                item,
+                token,
+            }),
             Message::Done => Vec::new(),
         };
         commands.extend(model.housekeeping());

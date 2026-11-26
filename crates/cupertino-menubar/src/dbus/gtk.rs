@@ -1,27 +1,37 @@
 //! Reader for GMenuModel exported over D-Bus (`org.gtk.Menus` and `org.gtk.Actions`, open GNOME
 //! interfaces).
 //!
-//! `org.gtk.Menus.Start(au) → a(uuaa{sv})` returns whole menus keyed by `(group, menu)`; an item
-//! links to other menus through the `:section` and `:submenu` keys (each a `(uu)` pair). Sections are
-//! flattened with separators between them. Item attributes used: `label`, `action`,
-//! `action-namespace`, `target`, `hidden-when`, `accel`; an item keeps its full action name and its accelerator
-//! text, which the bar shows through its modifier map. The application menu (`app_menu_object_path`) is read next
-//! to the menu bar and leads the tree under [`GTK_APP_MENU`]. Action state and enabled flags come from
-//! `org.gtk.Actions.DescribeAll`; activation calls `org.gtk.Actions.Activate` on the object that
-//! owns the action (`app.` actions on the application object, `win.` actions on the window object).
-//! Both interfaces' `Changed` signals keep the cache current ([`GtkMenuClient::changes`]); records for menus never
-//! loaded are ignored, and a menu keeps at most [`MAX_MENU_ITEMS`] items, since any application can send them.
+//! `org.gtk.Menus.Start(au) → a(uuaa{sv})` subscribes to groups of menus and returns their menus keyed by
+//! `(group, menu)`; `End(au)` ends a subscription, and the exporter sends changes only for the groups subscribed. An
+//! item links to other menus through the `:section` and `:submenu` keys (each a `(uu)` pair): a section is a menu of the
+//! same group, a submenu usually one of a group of its own. Sections are flattened with separators between them. Item
+//! attributes used: `label` (`_` marks the mnemonic, `__` is an underscore), `action`, `action-namespace` (on a link: it
+//! prefixes the actions of the linked menu), `target`, `hidden-when` (`action-missing`, `action-disabled`, and
+//! `macos-menubar`, which a global menu bar hides always), `accel` (kept as text, which the bar shows through its
+//! modifier map), `icon` and `verb-icon` (a serialized icon: a name, a themed icon's names or an image's bytes). The
+//! application menu (`app_menu_object_path`) is read next to the menu bar and leads the tree under [`GTK_APP_MENU`].
+//!
+//! An item's action is found as a menu tracker finds it: the action of its full name (`app.` actions are the
+//! application object's, `win.` actions the window object's, any other prefix names nothing here) must exist and take
+//! a parameter exactly when the item has a target, of the target's type; else the item is disabled. A stateful action
+//! with a target shows a radio mark, checked when its state equals the target; a boolean one without a target a check
+//! mark. Action state and enabled flags come from `org.gtk.Actions.DescribeAll`; activation calls
+//! `org.gtk.Actions.Activate` on the object that owns the action, with the item's target and an activation token in
+//! its platform data. Both interfaces' `Changed` signals keep the cache current ([`GtkMenuClient::changes`]): change
+//! records apply to the groups subscribed, and a menu of such a group a record names first is created; groups that come
+//! into the tree are subscribed and those that leave it ended ([`GtkMenuClient::subscription`]). A menu keeps at most
+//! [`MAX_MENU_ITEMS`] items and an object at most [`MAX_GROUPS`] groups, since any application can send them.
 
 use std::collections::{HashMap, HashSet};
 
-use futures_util::stream::BoxStream;
-use futures_util::StreamExt;
 use zbus::zvariant::{OwnedValue, Signature, Value};
-use zbus::Connection;
 
 use crate::item::{split_gtk_mnemonic, ItemId, MenuItem, Toggle};
 use crate::merge::GTK_APP_MENU;
-use crate::source::GtkMenuProps;
+
+mod client;
+
+pub use client::{GtkActivation, GtkMenuClient, GtkStarted, GtkSubscription};
 
 pub type RawItems = Vec<HashMap<String, OwnedValue>>;
 /// Reply item of `Start`: `(group, menu, items)`.
@@ -38,9 +48,19 @@ pub const MAX_MENU_ITEMS: usize = 1000;
 pub const MAX_TREE_ITEMS: usize = 5000;
 /// The most actions the bar keeps of an exporter; further ones are not added.
 pub const MAX_ACTIONS: usize = 10_000;
+/// The most groups the bar subscribes to on one menu object of an exporter: groups further down the tree are not
+/// subscribed, so an exporter that keeps adding submenus cannot make the bar subscribe without end.
+pub const MAX_GROUPS: usize = 256;
+/// The most change records kept for groups whose `Start` reply has not come yet; later ones are dropped.
+pub const MAX_HELD_RECORDS: usize = 1000;
+/// How deep links are followed: a tree nested deeper builds nothing below this depth.
+const MAX_DEPTH: usize = 16;
+/// The rounds of `Start` a load makes for groups the menus it read link to; groups further down are subscribed after
+/// the load, one round at a time ([`GtkMenuClient::subscription`]).
+pub const LOAD_ROUNDS: usize = 8;
 
 /// Which `org.gtk.Menus` object of an exporter a change is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MenuObject {
     MenuBar,
     AppMenu,
@@ -49,7 +69,9 @@ pub enum MenuObject {
 /// A `Changed` signal of an exporter.
 #[derive(Debug)]
 pub enum GtkChange {
-    Menus(MenuObject, Vec<RawChange>),
+    /// The records of a menu object's signal, with the signal's serial number, which orders it against the replies of
+    /// the same exporter.
+    Menus(MenuObject, u32, Vec<RawChange>),
     /// The actions of the `app.` or `win.` object: removed, enabled changed, state changed, added.
     Actions {
         scope: &'static str,
@@ -117,35 +139,101 @@ pub mod actions_iface {
 pub use actions_iface::GtkActionsProxy;
 pub use menus_iface::GtkMenusProxy;
 
-/// The cached menus of one exporter.
+/// The cached menus of one `org.gtk.Menus` object of an exporter, and its subscriptions.
 #[derive(Default)]
 pub struct GtkMenus {
     menus: HashMap<(u32, u32), RawItems>,
+    /// Groups whose `Start` reply came: their changes apply.
+    subscribed: HashSet<u32>,
+    /// Groups asked for with `Start` whose reply has not come.
+    pending: HashSet<u32>,
+    /// Groups whose `Start` failed: they are not asked for again by this cache.
+    refused: HashSet<u32>,
+    /// Records for pending groups, with their signal's serial: applied once the reply came if sent after it.
+    held: Vec<(u32, RawChange)>,
 }
 
 impl GtkMenus {
-    pub fn from_reply(reply: Vec<RawMenu>) -> Self {
+    /// The menus of the reply to `Start(groups)`, those groups subscribed.
+    pub fn from_reply(groups: &[u32], reply: Vec<RawMenu>) -> Self {
         let mut m = Self::default();
-        m.merge_reply(reply);
+        m.begin(groups);
+        m.started(groups, None, reply);
         m
     }
 
-    pub fn merge_reply(&mut self, reply: Vec<RawMenu>) {
+    /// `groups` were asked for with `Start`.
+    pub fn begin(&mut self, groups: &[u32]) {
+        self.pending.extend(groups);
+    }
+
+    /// The reply to `Start(groups)` came, as the message of serial `serial`: the groups' menus are the reply's, and
+    /// the records held for them that were sent after the reply apply on top. A group the reply has no menus of is
+    /// subscribed and empty.
+    pub fn started(&mut self, groups: &[u32], serial: Option<u32>, reply: Vec<RawMenu>) {
+        for g in groups {
+            self.pending.remove(g);
+            self.subscribed.insert(*g);
+        }
+        self.menus.retain(|(g, _), _| !groups.contains(g));
         for (g, m, mut items) in reply {
-            items.truncate(MAX_MENU_ITEMS);
-            self.menus.insert((g, m), items);
+            if groups.contains(&g) {
+                items.truncate(MAX_MENU_ITEMS);
+                self.menus.insert((g, m), items);
+            }
+        }
+        let (now, still): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held)
+            .into_iter()
+            .partition(|(_, record)| groups.contains(&record.0));
+        self.held = still;
+        for (s, record) in now {
+            if serial.is_none_or(|reply| s > reply) {
+                self.apply_record(record);
+            }
         }
     }
 
-    /// Apply one record of the `Changed` signal: replace `removed` items at `position` with `added`. A record for a
-    /// menu that was never loaded is ignored.
-    pub fn apply_change(&mut self, change: RawChange) {
-        let (g, m, position, removed, added) = change;
-        let Some(list) = self.menus.get_mut(&(g, m)) else {
+    /// `Start(groups)` failed: they are no longer pending, and not asked for again.
+    pub fn refused(&mut self, groups: &[u32]) {
+        for g in groups {
+            self.pending.remove(g);
+            self.refused.insert(*g);
+        }
+        self.held.retain(|(_, record)| !groups.contains(&record.0));
+    }
+
+    /// `groups` were ended: their menus are forgotten and their changes no longer apply.
+    pub fn ended(&mut self, groups: &[u32]) {
+        for g in groups {
+            self.subscribed.remove(g);
+        }
+        self.menus.retain(|(g, _), _| !groups.contains(g));
+    }
+
+    /// Apply one record of a `Changed` signal of serial `serial`: replace `removed` items at `position` with `added`.
+    /// A record for a group not subscribed is ignored, one for a group whose reply is awaited is held until it comes,
+    /// and one that removes past the end of its menu is ignored, as the menus' clients do.
+    pub fn apply_change(&mut self, serial: u32, change: RawChange) {
+        if self.pending.contains(&change.0) {
+            if self.held.len() < MAX_HELD_RECORDS {
+                self.held.push((serial, change));
+            }
             return;
-        };
-        let pos = (position as usize).min(list.len());
-        let end = pos.saturating_add(removed as usize).min(list.len());
+        }
+        self.apply_record(change);
+    }
+
+    fn apply_record(&mut self, change: RawChange) {
+        let (g, m, position, removed, added) = change;
+        if !self.subscribed.contains(&g) {
+            return;
+        }
+        // a new menu of a subscribed group (a section added) comes as a record of its own
+        let list = self.menus.entry((g, m)).or_default();
+        let (pos, end) = (position as usize, position as usize + removed as usize);
+        if end > list.len() {
+            return;
+        }
         list.splice(pos..end, added);
         list.truncate(MAX_MENU_ITEMS);
     }
@@ -154,31 +242,79 @@ impl GtkMenus {
         self.menus.get(&(group, menu))
     }
 
-    /// Menu references reachable from `root` whose group has not been loaded.
-    pub fn missing_groups(&self, root: (u32, u32)) -> Vec<u32> {
+    /// The groups subscribed, not those whose reply is awaited.
+    pub fn subscribed_groups(&self) -> Vec<u32> {
+        let mut all: Vec<u32> = self.subscribed.iter().copied().collect();
+        all.sort_unstable();
+        all
+    }
+
+    /// The groups the tree below `(0, 0)` links to, and whether the walk saw all of it.
+    fn reachable(&self) -> (HashSet<u32>, bool) {
+        let mut groups = HashSet::from([0]);
         let mut seen = HashSet::new();
-        let mut missing = Vec::new();
-        let mut stack = vec![root];
+        let mut stack = vec![(0, 0)];
+        let mut examined = 0;
         while let Some(key) = stack.pop() {
             if !seen.insert(key) {
                 continue;
             }
-            match self.menus.get(&key) {
-                Some(items) => {
-                    for it in items {
-                        for k in [":section", ":submenu"] {
-                            if let Some(r) = link(it, k) {
-                                stack.push(r);
-                            }
-                        }
+            groups.insert(key.0);
+            for it in self.menus.get(&key).into_iter().flatten() {
+                examined += 1;
+                if examined > MAX_TREE_ITEMS {
+                    return (groups, false);
+                }
+                for k in [":section", ":submenu"] {
+                    if let Some(r) = link(it, k) {
+                        groups.insert(r.0);
+                        stack.push(r);
                     }
                 }
-                None if !missing.contains(&key.0) => missing.push(key.0),
-                None => {}
             }
         }
+        (groups, true)
+    }
+
+    /// The groups the tree links to that are not subscribed, asked for or refused, at most as many as keep the
+    /// subscriptions within [`MAX_GROUPS`].
+    pub fn missing_groups(&self) -> Vec<u32> {
+        let room = MAX_GROUPS.saturating_sub(self.subscribed.len() + self.pending.len());
+        let mut missing: Vec<u32> = self
+            .reachable()
+            .0
+            .into_iter()
+            .filter(|g| {
+                !self.subscribed.contains(g)
+                    && !self.pending.contains(g)
+                    && !self.refused.contains(g)
+            })
+            .collect();
         missing.sort_unstable();
+        missing.truncate(room);
         missing
+    }
+
+    /// The groups subscribed that the tree no longer links to (never the root's); none when the tree is too large to
+    /// walk whole.
+    pub fn unreachable_groups(&self) -> Vec<u32> {
+        let (reachable, whole) = self.reachable();
+        if !whole {
+            return Vec::new();
+        }
+        let mut gone: Vec<u32> = self
+            .subscribed
+            .iter()
+            .filter(|g| **g != 0 && !reachable.contains(g))
+            .copied()
+            .collect();
+        gone.sort_unstable();
+        gone
+    }
+
+    /// Whether a `Start` reply is awaited.
+    pub fn is_pending(&self) -> bool {
+        !self.pending.is_empty()
     }
 }
 
@@ -194,9 +330,50 @@ fn link(item: &HashMap<String, OwnedValue>, key: &str) -> Option<(u32, u32)> {
     }
 }
 
+/// An item's icon, from its serialized form: a name, `('themed', <names>)` or `('bytes', <image>)`. A file's icon is
+/// not read.
+fn icon(item: &HashMap<String, OwnedValue>, key: &str) -> (Option<String>, Option<Vec<u8>>) {
+    let name = |s: &str| {
+        let file = s.starts_with('/') || s.contains("://");
+        (!s.is_empty() && !file).then(|| s.to_owned())
+    };
+    match super::prop(item, key) {
+        Some(Value::Str(s)) => (name(s.as_str()), None),
+        Some(Value::Structure(s)) => match s.fields() {
+            [kind, value] => match (super::unwrap_variant(kind), super::unwrap_variant(value)) {
+                (Value::Str(k), Value::Array(names)) if k.as_str() == "themed" => {
+                    let first = names.iter().find_map(|n| match n {
+                        Value::Str(n) => name(n.as_str()),
+                        _ => None,
+                    });
+                    (first, None)
+                }
+                (Value::Str(k), Value::Str(n)) if k.as_str() == "themed" => {
+                    (name(n.as_str()), None)
+                }
+                (Value::Str(k), Value::Array(bytes)) if k.as_str() == "bytes" => {
+                    let data: Vec<u8> = bytes
+                        .iter()
+                        .filter_map(|b| match b {
+                            Value::U8(b) => Some(*b),
+                            _ => None,
+                        })
+                        .collect();
+                    (None, (!data.is_empty()).then_some(data))
+                }
+                _ => (None, None),
+            },
+            _ => (None, None),
+        },
+        _ => (None, None),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct GtkActionState {
     pub enabled: bool,
+    /// The type of the action's parameter; `None` for an action without one.
+    pub parameter: Option<Signature>,
     pub state: Option<OwnedValue>,
 }
 
@@ -204,15 +381,52 @@ impl GtkActionState {
     pub fn from_raw(raw: &RawAction) -> Self {
         Self {
             enabled: raw.0,
+            parameter: (raw.1 != Signature::Unit).then(|| raw.1.clone()),
             state: raw.2.first().and_then(|v| v.try_clone().ok()),
         }
     }
 }
 
-/// Keep the action `name`, unless the exporter has [`MAX_ACTIONS`] already: a known one is updated.
-fn add_action(states: &mut HashMap<String, GtkActionState>, name: String, raw: &RawAction) {
-    if states.len() < MAX_ACTIONS || states.contains_key(&name) {
+/// The actions of an exporter by full name (`app.quit`, `win.close`).
+pub type GtkActions = HashMap<String, GtkActionState>;
+
+/// Keep the action `name` unless it is known (an addition of a known action changes nothing) or the exporter has
+/// [`MAX_ACTIONS`] already.
+fn add_action(states: &mut GtkActions, name: String, raw: &RawAction) {
+    if states.len() < MAX_ACTIONS && !states.contains_key(&name) {
         states.insert(name, GtkActionState::from_raw(raw));
+    }
+}
+
+/// Apply a `Changed` signal of the actions of `scope` as the action group's clients do: removals, then enabled
+/// changes, then state changes (to a state of the type the action has), then additions.
+pub fn apply_actions(
+    states: &mut GtkActions,
+    scope: &str,
+    removed: Vec<String>,
+    enabled: HashMap<String, bool>,
+    state: HashMap<String, OwnedValue>,
+    added: HashMap<String, RawAction>,
+) {
+    for name in removed {
+        states.remove(&format!("{scope}.{name}"));
+    }
+    for (name, on) in enabled {
+        if let Some(action) = states.get_mut(&format!("{scope}.{name}")) {
+            action.enabled = on;
+        }
+    }
+    for (name, value) in state {
+        if let Some(action) = states.get_mut(&format!("{scope}.{name}")) {
+            if let Some(old) = &action.state {
+                if old.value_signature() == value.value_signature() {
+                    action.state = Some(value);
+                }
+            }
+        }
+    }
+    for (name, raw) in added {
+        add_action(states, format!("{scope}.{name}"), &raw);
     }
 }
 
@@ -231,13 +445,38 @@ pub struct GtkBuild {
 
 struct Builder<'a> {
     menus: &'a GtkMenus,
-    actions: &'a HashMap<String, GtkActionState>,
+    actions: &'a GtkActions,
     next_id: i32,
     refs: HashMap<ItemId, GtkActionRef>,
     /// The menus being built, outermost first: a link back to one of them builds nothing.
     path: Vec<(u32, u32)>,
     /// Entries looked at so far, of every menu.
     examined: usize,
+}
+
+/// Whether an item of `target` can activate `action`: the action takes a parameter exactly when the item has a target,
+/// of the target's type.
+fn can_activate(action: &GtkActionState, target: Option<&OwnedValue>) -> bool {
+    match (&action.parameter, target) {
+        (None, None) => true,
+        (Some(parameter), Some(target)) => target.value_signature() == parameter,
+        _ => false,
+    }
+}
+
+/// The mark of an item of `target` whose action has `state`.
+fn toggle(state: Option<&OwnedValue>, target: Option<&OwnedValue>) -> Toggle {
+    match (state, target) {
+        (Some(state), Some(target)) => {
+            let same = state.value_signature() == target.value_signature() && **state == **target;
+            Toggle::Radio(same)
+        }
+        (Some(state), None) => match &**state {
+            Value::Bool(b) => Toggle::Check(*b),
+            _ => Toggle::None,
+        },
+        _ => Toggle::None,
+    }
 }
 
 impl Builder<'_> {
@@ -247,7 +486,7 @@ impl Builder<'_> {
     }
 
     fn build(&mut self, key: (u32, u32), namespace: &str) -> Vec<MenuItem> {
-        if self.path.len() > 16 || self.path.contains(&key) {
+        if self.path.len() > MAX_DEPTH || self.path.contains(&key) {
             return Vec::new();
         }
         let mut out: Vec<MenuItem> = Vec::new();
@@ -261,12 +500,16 @@ impl Builder<'_> {
             if self.examined > MAX_TREE_ITEMS {
                 break;
             }
-            let ns = match super::prop_str(it, "action-namespace") {
+            if super::prop_str(it, "hidden-when").as_deref() == Some("macos-menubar") {
+                continue;
+            }
+            // a link's namespace prefixes the actions of the menu it links to
+            let linked = match super::prop_str(it, "action-namespace") {
                 Some(n) => format!("{namespace}{n}."),
                 None => namespace.to_string(),
             };
             if let Some(sec) = link(it, ":section") {
-                let inner = self.build(sec, &ns);
+                let inner = self.build(sec, &linked);
                 if inner.is_empty() {
                     continue;
                 }
@@ -280,59 +523,16 @@ impl Builder<'_> {
             let label = super::prop_str(it, "label").unwrap_or_default();
             if let Some(sub) = link(it, ":submenu") {
                 let id = self.new_id();
-                let children = self.build(sub, &ns);
+                let children = self.build(sub, &linked);
                 let mut item = MenuItem::submenu(id, "", children);
                 (item.label, item.mnemonic) = split_gtk_mnemonic(&label);
+                (item.icon_name, item.icon_data) = icon(it, "icon");
                 out.push(item);
                 continue;
             }
-            let action = super::prop_str(it, "action");
-            if label.is_empty() && action.is_none() {
-                continue;
+            if let Some(item) = self.item(it, &label, namespace) {
+                out.push(item);
             }
-            let full = action.as_ref().map(|a| {
-                if a.contains('.') && ns.is_empty() {
-                    a.clone()
-                } else {
-                    format!("{ns}{a}")
-                }
-            });
-            let state = full.as_ref().and_then(|a| self.actions.get(a));
-            match (super::prop_str(it, "hidden-when").as_deref(), &full, state) {
-                (Some("action-disabled"), _, Some(s)) if !s.enabled => continue,
-                (Some("action-missing"), Some(_), None) => continue,
-                _ => {}
-            }
-            let id = self.new_id();
-            let mut item = MenuItem::new(id, "");
-            let (l, m) = split_gtk_mnemonic(&label);
-            item.label = l;
-            item.mnemonic = m;
-            item.enabled = match (&full, state) {
-                (Some(_), Some(s)) => s.enabled,
-                (Some(_), None) => false,
-                (None, _) => true,
-            };
-            let target = it.get("target").and_then(|v| v.try_clone().ok());
-            if let Some(s) = state.and_then(|s| s.state.as_ref()) {
-                item.toggle = match (
-                    super::unwrap_variant(s),
-                    target.as_ref().map(|t| super::unwrap_variant(t)),
-                ) {
-                    (Value::Bool(b), None) => Toggle::Check(*b),
-                    (Value::Str(a), Some(Value::Str(b))) => Toggle::Radio(a.as_str() == b.as_str()),
-                    (Value::I32(a), Some(Value::I32(b))) => Toggle::Radio(a == b),
-                    _ => Toggle::None,
-                };
-            }
-            item.accel = super::prop_str(it, "accel");
-            item.icon_name = super::prop_str(it, "icon").filter(|name| !name.is_empty());
-            if let Some(a) = full {
-                item.action = Some(a.clone());
-                self.refs
-                    .insert(ItemId(id), GtkActionRef { action: a, target });
-            }
-            out.push(item);
         }
         while out.last().is_some_and(|l| l.separator) {
             out.pop();
@@ -340,15 +540,56 @@ impl Builder<'_> {
         self.path.pop();
         out
     }
+
+    /// The row of an item that links to no menu, unless it is hidden.
+    fn item(
+        &mut self,
+        it: &HashMap<String, OwnedValue>,
+        label: &str,
+        namespace: &str,
+    ) -> Option<MenuItem> {
+        let action = super::prop_str(it, "action");
+        if label.is_empty() && action.is_none() {
+            return None;
+        }
+        let full = action.map(|a| format!("{namespace}{a}"));
+        let target = it.get("target").and_then(|v| v.try_clone().ok());
+        let found = full.as_ref().and_then(|a| self.actions.get(a));
+        let usable = found.filter(|s| can_activate(s, target.as_ref()));
+        let enabled = match (&full, usable) {
+            (Some(_), Some(s)) => s.enabled,
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
+        match super::prop_str(it, "hidden-when").as_deref() {
+            Some("action-disabled") if full.is_some() && !enabled => return None,
+            Some("action-missing") if full.is_some() && usable.is_none() => return None,
+            _ => {}
+        }
+        let id = self.new_id();
+        let mut item = MenuItem::new(id, "");
+        (item.label, item.mnemonic) = split_gtk_mnemonic(label);
+        item.enabled = enabled;
+        if let Some(s) = usable {
+            item.toggle = toggle(s.state.as_ref(), target.as_ref());
+        }
+        item.accel = super::prop_str(it, "accel").filter(|a| !a.is_empty());
+        (item.icon_name, item.icon_data) = match icon(it, "icon") {
+            (None, None) => icon(it, "verb-icon"),
+            found => found,
+        };
+        if let Some(a) = full {
+            item.action = Some(a.clone());
+            self.refs
+                .insert(ItemId(id), GtkActionRef { action: a, target });
+        }
+        Some(item)
+    }
 }
 
 /// Build the item tree below `root` (the menu bar is `(0, 0)`). `actions` is keyed by full action
 /// name (`app.quit`, `win.close`).
-pub fn build_menu(
-    menus: &GtkMenus,
-    root: (u32, u32),
-    actions: &HashMap<String, GtkActionState>,
-) -> GtkBuild {
+pub fn build_menu(menus: &GtkMenus, root: (u32, u32), actions: &GtkActions) -> GtkBuild {
     let mut b = Builder {
         menus,
         actions,
@@ -367,11 +608,7 @@ pub fn build_menu(
 /// The tree of an exporter: the menus of its menu bar, led by the application menu under [`GTK_APP_MENU`] when that
 /// has items. Ids are numbered across both from 1, the menu bar's first, so they do not depend on the application
 /// menu and never reach the bar's own ids (all negative).
-pub fn build_menus(
-    menubar: &GtkMenus,
-    app_menu: &GtkMenus,
-    actions: &HashMap<String, GtkActionState>,
-) -> GtkBuild {
+pub fn build_menus(menubar: &GtkMenus, app_menu: &GtkMenus, actions: &GtkActions) -> GtkBuild {
     let mut b = Builder {
         menus: menubar,
         actions,
@@ -392,261 +629,16 @@ pub fn build_menus(
     }
 }
 
-/// A connected exporter.
-pub struct GtkMenuClient {
-    conn: Connection,
-    props: GtkMenuProps,
-    menus: GtkMenus,
-    app_menu: GtkMenus,
-    action_states: HashMap<String, GtkActionState>,
-    refs: HashMap<ItemId, GtkActionRef>,
-}
+/// Scope names of the action objects an exporter announces: the application's and the window's.
+pub const SCOPES: [&str; 2] = ["app", "win"];
 
-impl GtkMenuClient {
-    /// Load the menu bar, the application menu and the action states of the window and application objects.
-    pub async fn load(
-        conn: &Connection,
-        props: &GtkMenuProps,
-    ) -> zbus::Result<(Self, Vec<MenuItem>)> {
-        let mut c = Self {
-            conn: conn.clone(),
-            props: props.clone(),
-            menus: GtkMenus::default(),
-            app_menu: GtkMenus::default(),
-            action_states: HashMap::new(),
-            refs: HashMap::new(),
-        };
-        let items = c.reload().await?;
-        Ok((c, items))
+/// The platform data `Activate` carries: the activation token under both keys toolkits read it from (`activation-token`
+/// on Wayland, `desktop-startup-id` elsewhere and in older toolkits), so a window the action opens takes the focus.
+pub fn platform_data(token: Option<&str>) -> HashMap<&'static str, Value<'static>> {
+    let mut data = HashMap::new();
+    if let Some(token) = token.filter(|t| !t.is_empty()) {
+        data.insert("activation-token", Value::from(token.to_owned()));
+        data.insert("desktop-startup-id", Value::from(token.to_owned()));
     }
-
-    async fn menus_proxy(&self, path: &str) -> zbus::Result<GtkMenusProxy<'static>> {
-        GtkMenusProxy::builder(&self.conn)
-            .destination(self.props.bus_name.clone())?
-            .path(path.to_string())?
-            .build()
-            .await
-    }
-
-    async fn actions_proxy(&self, path: &str) -> zbus::Result<GtkActionsProxy<'static>> {
-        GtkActionsProxy::builder(&self.conn)
-            .destination(self.props.bus_name.clone())?
-            .path(path.to_string())?
-            .build()
-            .await
-    }
-
-    /// The menus of the `org.gtk.Menus` object at `path` reachable from `(0, 0)`; none without a path.
-    async fn load_menus(&self, path: Option<&str>) -> zbus::Result<GtkMenus> {
-        let Some(path) = path else {
-            return Ok(GtkMenus::default());
-        };
-        let menus = self.menus_proxy(path).await?;
-        let mut cache = GtkMenus::from_reply(menus.start(&[0]).await?);
-        let mut subscribed: HashSet<u32> = HashSet::from([0]);
-        for _ in 0..8 {
-            let missing: Vec<u32> = cache
-                .missing_groups((0, 0))
-                .into_iter()
-                .filter(|g| !subscribed.contains(g))
-                .collect();
-            if missing.is_empty() {
-                break;
-            }
-            cache.merge_reply(menus.start(&missing).await?);
-            subscribed.extend(missing);
-        }
-        Ok(cache)
-    }
-
-    /// Fetch everything again and rebuild the tree.
-    pub async fn reload(&mut self) -> zbus::Result<Vec<MenuItem>> {
-        self.menus = self
-            .load_menus(self.props.menubar_object_path.as_deref())
-            .await?;
-        self.app_menu = self
-            .load_menus(self.props.app_menu_object_path.as_deref())
-            .await?;
-        self.action_states.clear();
-        for (scope, path) in [
-            ("app", self.props.application_object_path.clone()),
-            ("win", self.props.window_object_path.clone()),
-        ] {
-            let Some(path) = path else { continue };
-            if let Ok(proxy) = self.actions_proxy(&path).await {
-                if let Ok(all) = proxy.describe_all().await {
-                    for (name, raw) in all {
-                        add_action(&mut self.action_states, format!("{scope}.{name}"), &raw);
-                    }
-                }
-            }
-        }
-        Ok(self.rebuild())
-    }
-
-    fn rebuild(&mut self) -> Vec<MenuItem> {
-        let built = build_menus(&self.menus, &self.app_menu, &self.action_states);
-        self.refs = built.actions;
-        built.items
-    }
-
-    /// What activating `item` calls; `None` for an item without an action.
-    pub fn activation(&self, item: ItemId) -> Option<GtkActivation> {
-        let r = self.refs.get(&item)?;
-        let (scope, name) = r.action.split_once('.').unwrap_or(("app", &r.action));
-        let path = match scope {
-            "win" => self.props.window_object_path.clone(),
-            _ => self.props.application_object_path.clone(),
-        }?;
-        let params: Vec<Value<'static>> = r
-            .target
-            .as_ref()
-            .and_then(|t| t.try_clone().ok())
-            .map(|t| match Value::from(t) {
-                Value::Value(inner) => vec![*inner],
-                other => vec![other],
-            })
-            .unwrap_or_default();
-        Some(GtkActivation {
-            conn: self.conn.clone(),
-            bus_name: self.props.bus_name.clone(),
-            path,
-            name: name.to_string(),
-            params,
-        })
-    }
-
-    /// Activate the action behind `item`. Returns `false` for items without an action.
-    pub async fn activate(&self, item: ItemId) -> zbus::Result<bool> {
-        match self.activation(item) {
-            Some(activation) => activation.run().await.map(|()| true),
-            None => Ok(false),
-        }
-    }
-
-    pub fn menus(&self) -> &GtkMenus {
-        &self.menus
-    }
-
-    /// The `Changed` signals of the exporter's menus and actions, as one stream. Subscribe before [`Self::load`], so
-    /// no change made while the menus load is missed.
-    pub async fn changes(
-        conn: &Connection,
-        props: &GtkMenuProps,
-    ) -> zbus::Result<BoxStream<'static, GtkChange>> {
-        let menus = |path: String| {
-            GtkMenusProxy::builder(conn)
-                .destination(props.bus_name.clone())
-                .and_then(|b| b.path(path))
-        };
-        let actions = |path: String| {
-            GtkActionsProxy::builder(conn)
-                .destination(props.bus_name.clone())
-                .and_then(|b| b.path(path))
-        };
-        let mut streams: Vec<BoxStream<'static, GtkChange>> = Vec::new();
-        for (object, path) in [
-            (MenuObject::MenuBar, &props.menubar_object_path),
-            (MenuObject::AppMenu, &props.app_menu_object_path),
-        ] {
-            let Some(path) = path.clone() else { continue };
-            let changed = menus(path)?.build().await?.receive_changed().await?;
-            streams.push(
-                changed
-                    .filter_map(move |signal| async move {
-                        let args = signal.args().ok()?;
-                        Some(GtkChange::Menus(object, args.changes))
-                    })
-                    .boxed(),
-            );
-        }
-        for (scope, path) in [
-            ("app", &props.application_object_path),
-            ("win", &props.window_object_path),
-        ] {
-            let Some(path) = path.clone() else { continue };
-            let changed = actions(path)?.build().await?.receive_changed().await?;
-            streams.push(
-                changed
-                    .filter_map(move |signal| async move {
-                        let args = signal.args().ok()?;
-                        Some(GtkChange::Actions {
-                            scope,
-                            removed: args.removed,
-                            enabled: args.enabled_changed,
-                            state: args.state_changed,
-                            added: args.added,
-                        })
-                    })
-                    .boxed(),
-            );
-        }
-        Ok(futures_util::stream::select_all(streams).boxed())
-    }
-
-    /// Take a change of the exporter into the cache; [`Self::items`] then builds the tree from it.
-    pub fn apply(&mut self, change: GtkChange) {
-        match change {
-            GtkChange::Menus(object, records) => {
-                let menus = match object {
-                    MenuObject::MenuBar => &mut self.menus,
-                    MenuObject::AppMenu => &mut self.app_menu,
-                };
-                for record in records {
-                    menus.apply_change(record);
-                }
-            }
-            GtkChange::Actions {
-                scope,
-                removed,
-                enabled,
-                state,
-                added,
-            } => {
-                for name in removed {
-                    self.action_states.remove(&format!("{scope}.{name}"));
-                }
-                for (name, raw) in added {
-                    add_action(&mut self.action_states, format!("{scope}.{name}"), &raw);
-                }
-                for (name, on) in enabled {
-                    if let Some(action) = self.action_states.get_mut(&format!("{scope}.{name}")) {
-                        action.enabled = on;
-                    }
-                }
-                for (name, value) in state {
-                    if let Some(action) = self.action_states.get_mut(&format!("{scope}.{name}")) {
-                        action.state = Some(value);
-                    }
-                }
-            }
-        }
-    }
-
-    /// The tree of the cached menus and actions.
-    pub fn items(&mut self) -> Vec<MenuItem> {
-        self.rebuild()
-    }
-}
-
-/// An item's activation, made apart from its client: the client stays with the worker meanwhile.
-pub struct GtkActivation {
-    conn: Connection,
-    bus_name: String,
-    path: String,
-    name: String,
-    params: Vec<Value<'static>>,
-}
-
-impl GtkActivation {
-    pub async fn run(self) -> zbus::Result<()> {
-        let proxy = GtkActionsProxy::builder(&self.conn)
-            .destination(self.bus_name)?
-            .path(self.path)?
-            .build()
-            .await?;
-        proxy
-            .activate(&self.name, &self.params, HashMap::new())
-            .await
-    }
+    data
 }

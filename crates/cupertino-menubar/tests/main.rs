@@ -2,6 +2,8 @@
 //! test's name starts with its file's.
 
 mod glass;
+#[path = "gtk-menus.rs"]
+mod gtk_menus;
 #[path = "late-menu.rs"]
 mod late_menu;
 mod menus;

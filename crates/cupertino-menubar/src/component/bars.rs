@@ -587,8 +587,14 @@ impl Model {
             .map(|b| b.feed.source(&self.shared))
             .collect();
         for source in self.shared.prune_layouts(&in_use) {
-            if let crate::source::MenuSource::Kde(menu) = source {
-                commands.extend(self.request(Request::ReleaseDbusMenu(menu)));
+            match source {
+                crate::source::MenuSource::Kde(menu) => {
+                    commands.extend(self.request(Request::ReleaseDbusMenu(menu)));
+                }
+                crate::source::MenuSource::Gtk(props) => {
+                    commands.extend(self.request(Request::ReleaseGtk(props)));
+                }
+                crate::source::MenuSource::Synthetic => {}
             }
         }
         commands
@@ -623,6 +629,16 @@ impl Model {
                         self.bars[i].controller.set_alt(false);
                     }
                     menu_bar::set_menu_open(&window, open);
+                }
+                // a window the action opens takes the focus with the bar's activation token
+                Action::Request(Request::ActivateGtk { props, item, .. }) => {
+                    commands.push(Do::ActivationToken {
+                        window: window.clone(),
+                        app_id: props.application_id.clone(),
+                        on_token: Box::new(move |token| {
+                            Message::GtkToken(Box::new(props.clone()), item, token)
+                        }),
+                    });
                 }
                 Action::Request(request) => commands.extend(self.request(request)),
                 Action::TogglePanel(panel) => bus::publish(Published::TogglePanel {

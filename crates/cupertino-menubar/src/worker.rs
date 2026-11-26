@@ -7,7 +7,7 @@
 //! on.
 
 use crate::dbus::dbusmenu::DBusMenuClient;
-use crate::dbus::gtk::{GtkChange, GtkMenuClient};
+use crate::dbus::gtk::{GtkChange, GtkMenuClient, GtkStarted};
 use crate::dbus::registrar;
 use crate::dbus::sni::{self, StatusItem, WatcherEvent, WatcherService};
 use crate::follow::{Command, Follower};
@@ -15,7 +15,6 @@ use crate::item::{ItemId, MenuItem};
 use crate::registered::Registration;
 use crate::source::{GtkMenuProps, KdeAppMenu, MenuSource};
 use crate::spawned::{Spawned, Spawner};
-use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -23,13 +22,18 @@ use std::sync::Arc;
 use std::time::Duration;
 use zbus::Connection;
 
+mod exporters;
+
+use exporters::Exporters;
+
 /// The first wait before a GTK menu load refused with `AccessDenied` is made again; it doubles up to
 /// [`GTK_RETRY_LAST`], then the refusal is reported. A CupertinoKit application learns that the bar's connection reads
 /// its menus over its own Wayland connection, which can come after the bar's first load.
 const GTK_RETRY_FIRST: Duration = Duration::from_millis(100);
 const GTK_RETRY_LAST: Duration = Duration::from_millis(1600);
 /// The changes of a GTK exporter reach the component at most this often: those that come in between are applied to its
-/// cache and sent as one tree, so an exporter that changes without pause cannot flood the bar.
+/// cache and sent as one tree, so an exporter that changes without pause cannot flood the bar. The groups those changes
+/// link to are subscribed as the tree is sent, so they are asked for no more often either.
 const GTK_CHANGE_INTERVAL: Duration = Duration::from_millis(50);
 /// A change that came while an exporter's menus loaded may or may not be in what the load read, so they are loaded
 /// again, this many times at most.
@@ -45,23 +49,22 @@ pub enum Request {
     FetchDbusMenu(KdeAppMenu),
     /// No bar shows the menus of a DBusMenu exporter any more: stop following it.
     ReleaseDbusMenu(KdeAppMenu),
-    /// Load the menu bar of a GMenuModel exporter.
+    /// Load the menu bar of a GMenuModel exporter and follow its changes until it is released.
     FetchGtk(GtkMenuProps),
+    /// No bar shows the menus of a GMenuModel exporter any more: stop following it and end its subscriptions.
+    ReleaseGtk(GtkMenuProps),
     /// The menu of an item (0 for the whole menu) of a followed DBusMenu exporter, an application's or a status
     /// item's, is about to be shown: tell the exporter, then read again what it says has changed. The answer is waited
     /// for by the worker, never by the bar, and no longer than [`Waits::about_to_show`].
-    AboutToShow {
-        menu: KdeAppMenu,
-        item: i32,
-    },
+    AboutToShow { menu: KdeAppMenu, item: i32 },
     /// Send `clicked` for an item of a DBusMenu.
-    ActivateDbusMenu {
-        menu: KdeAppMenu,
-        item: i32,
-    },
+    ActivateDbusMenu { menu: KdeAppMenu, item: i32 },
+    /// Activate the action of an item of a GMenuModel exporter, handing it `token` (an activation token of the bar's)
+    /// so a window the action opens takes the focus.
     ActivateGtk {
         props: GtkMenuProps,
         item: i32,
+        token: Option<String>,
     },
     /// Primary action of a status item at a point of the compositor space.
     ActivateStatus {
@@ -154,6 +157,12 @@ enum Work {
     GtkChanged(GtkMenuProps, GtkChange, async_channel::Sender<()>),
     /// Send the tree of an exporter whose changes were applied since it was last sent.
     GtkFlush(GtkMenuProps),
+    /// The replies of a subscription to an exporter's groups, made for its load `generation`.
+    GtkStarted {
+        props: GtkMenuProps,
+        generation: u64,
+        started: Box<GtkStarted>,
+    },
 }
 
 /// Sends events to the component.
@@ -265,13 +274,7 @@ async fn run(
     waits: Waits,
     registrar: Option<registrar::Registrar>,
 ) {
-    let mut gtk: HashMap<GtkMenuProps, GtkMenuClient> = HashMap::new();
-    // the task that forwards each exporter's changes; replacing or dropping it ends the subscription
-    let mut follows: HashMap<GtkMenuProps, zbus::Task<()>> = HashMap::new();
-    let mut unsent: HashSet<GtkMenuProps> = HashSet::new();
-    // exporters whose menus are loaded again, and those a change came for while they loaded
-    let mut reloading: HashSet<GtkMenuProps> = HashSet::new();
-    let mut missed: HashSet<GtkMenuProps> = HashSet::new();
+    let mut gtk = Exporters::new(&conn, &spawner, &tx, &out);
     let mut menus = Followed {
         conn: conn.clone(),
         out: out.clone(),
@@ -316,60 +319,14 @@ async fn run(
                 items,
                 follow,
                 reloads,
-            } => {
-                // sent once the client is kept, so an item chosen from the tree finds its action
-                out.emit(Event::Layout {
-                    source: MenuSource::Gtk(props.clone()),
-                    root: Box::new(MenuItem::submenu(0, "", items)),
-                });
-                gtk.insert(props.clone(), *client);
-                if reloads == 0 {
-                    match follow {
-                        Some(task) => {
-                            follows.insert(props.clone(), task);
-                        }
-                        None => {
-                            follows.remove(&props);
-                        }
-                    }
-                }
-                reloading.remove(&props);
-                if missed.remove(&props) && reloads < GTK_RELOADS {
-                    reloading.insert(props.clone());
-                    reload_gtk(&conn, &spawner, &tx, props, reloads + 1);
-                }
-            }
-            Work::GtkChanged(props, change, applied) => {
-                // the forwarding task waits for the answer; it is gone only when its exporter was replaced
-                let _ = applied.try_send(());
-                if reloading.contains(&props) || !gtk.contains_key(&props) {
-                    missed.insert(props.clone());
-                }
-                let Some(client) = gtk.get_mut(&props) else {
-                    continue;
-                };
-                client.apply(change);
-                if unsent.insert(props.clone()) {
-                    let tx = tx.clone();
-                    spawner.spawn(
-                        async move {
-                            async_io::Timer::after(GTK_CHANGE_INTERVAL).await;
-                            // the worker drops its receiver only when it ends
-                            let _ = tx.send(Work::GtkFlush(props)).await;
-                        },
-                        "cupertino-gtk-flush",
-                    );
-                }
-            }
-            Work::GtkFlush(props) => {
-                unsent.remove(&props);
-                if let Some(client) = gtk.get_mut(&props) {
-                    out.emit(Event::Layout {
-                        source: MenuSource::Gtk(props),
-                        root: Box::new(MenuItem::submenu(0, "", client.items())),
-                    });
-                }
-            }
+            } => gtk.loaded(props, *client, items, follow, reloads),
+            Work::GtkChanged(props, change, applied) => gtk.changed(props, change, &applied),
+            Work::GtkFlush(props) => gtk.flush(props),
+            Work::GtkStarted {
+                props,
+                generation,
+                started,
+            } => gtk.started(props, generation, *started),
             // awaited in order: a bar that goes and comes back leaves the name owned
             Work::Request(Request::AppMenuRegistrar(owned)) => {
                 app_menu_registrar(&conn, owned).await
@@ -379,7 +336,11 @@ async fn run(
                     registrar.forget(&gone);
                 }
             }
-            Work::Request(request) => handle(&conn, &spawner, &out, &tx, &mut gtk, request),
+            Work::Request(request) => {
+                if let Some(request) = gtk.handle(request) {
+                    handle(&conn, &spawner, request)
+                }
+            }
         }
     }
 }
@@ -458,58 +419,6 @@ impl Followed {
             follower.send(Command::Show(item));
         }
     }
-}
-
-/// Load the menus of `props` again, after changes came while they loaded.
-fn reload_gtk(
-    conn: &Connection,
-    spawner: &Spawner,
-    tx: &async_channel::Sender<Work>,
-    props: GtkMenuProps,
-    reloads: u8,
-) {
-    let (conn, tx) = (conn.clone(), tx.clone());
-    spawner.spawn(
-        async move {
-            match GtkMenuClient::load(&conn, &props).await {
-                Ok((client, items)) => {
-                    let loaded = Work::GtkLoaded {
-                        props,
-                        client: Box::new(client),
-                        items,
-                        follow: None,
-                        reloads,
-                    };
-                    // the worker drops its receiver only when it ends
-                    let _ = tx.send(loaded).await;
-                }
-                Err(e) => report(&format!("cannot load the menu of {}", props.bus_name), e),
-            }
-        },
-        "cupertino-reload-gtk",
-    );
-}
-
-/// Forward the changes of the exporter of `props` to the worker for as long as the returned task lives.
-fn follow_gtk(
-    conn: &Connection,
-    tx: &async_channel::Sender<Work>,
-    props: GtkMenuProps,
-    mut changes: BoxStream<'static, GtkChange>,
-) -> zbus::Task<()> {
-    let tx = tx.clone();
-    conn.executor().clone().spawn(
-        async move {
-            let (applied, done) = async_channel::bounded(1);
-            while let Some(change) = changes.next().await {
-                let work = Work::GtkChanged(props.clone(), change, applied.clone());
-                if tx.send(work).await.is_err() || done.recv().await.is_err() {
-                    return;
-                }
-            }
-        },
-        "cupertino-follow-gtk",
-    )
 }
 
 /// Claim the watcher and forward its events, then serve the registrar (`None` when it cannot be served).
@@ -595,68 +504,10 @@ async fn follow_status_item(
     }
 }
 
-fn handle(
-    conn: &Connection,
-    spawner: &Spawner,
-    out: &Out,
-    tx: &async_channel::Sender<Work>,
-    gtk: &mut HashMap<GtkMenuProps, GtkMenuClient>,
-    request: Request,
-) {
-    let (conn, out) = (conn.clone(), out.clone());
+fn handle(conn: &Connection, spawner: &Spawner, request: Request) {
+    let conn = conn.clone();
     let executor = spawner;
     match request {
-        Request::FetchGtk(props) => {
-            let tx = tx.clone();
-            executor.spawn(
-                async move {
-                    // followed before the load and read from the start: a full signal queue would stop the connection,
-                    // and with it the load's own reply
-                    let follow = match GtkMenuClient::changes(&conn, &props).await {
-                        Ok(changes) => Some(follow_gtk(&conn, &tx, props.clone(), changes)),
-                        Err(e) => {
-                            report(&format!("cannot follow the menus of {}", props.bus_name), e);
-                            None
-                        }
-                    };
-                    let mut wait = GTK_RETRY_FIRST;
-                    let loaded = loop {
-                        match GtkMenuClient::load(&conn, &props).await {
-                            Err(e) if is_access_denied(&e) && wait <= GTK_RETRY_LAST => {
-                                async_io::Timer::after(wait).await;
-                                wait *= 2;
-                            }
-                            loaded => break loaded,
-                        }
-                    };
-                    match loaded {
-                        Ok((client, items)) => {
-                            // the process drops its end only when it exits
-                            let loaded = Work::GtkLoaded {
-                                props,
-                                client: Box::new(client),
-                                items,
-                                follow,
-                                reloads: 0,
-                            };
-                            if tx.send(loaded).await.is_err() {
-                                report(
-                                    "cannot keep the menu exporter",
-                                    "the worker is shutting down",
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            report(&format!("cannot load the menu of {}", props.bus_name), e);
-                            out.emit(Event::LayoutFailed {
-                                source: MenuSource::Gtk(props),
-                            });
-                        }
-                    }
-                },
-                "cupertino-fetch-gtk",
-            )
-        }
         Request::ActivateDbusMenu { menu, item } => executor.spawn(
             async move {
                 let result = match DBusMenuClient::connect(&conn, &menu.service, &menu.path).await {
@@ -675,29 +526,6 @@ fn handle(
             },
             "cupertino-activate-menu",
         ),
-        Request::ActivateGtk { props, item } => {
-            // the client stays: its changes keep coming while the activation runs
-            let Some(activation) = gtk
-                .get(&props)
-                .and_then(|client| client.activation(ItemId(item)))
-            else {
-                return report(
-                    &format!("cannot activate item {item} of {}", props.bus_name),
-                    "the menu is not loaded or the item has no action",
-                );
-            };
-            executor.spawn(
-                async move {
-                    if let Err(e) = activation.run().await {
-                        report(
-                            &format!("cannot activate item {item} of {}", props.bus_name),
-                            e,
-                        );
-                    }
-                },
-                "cupertino-activate-gtk",
-            )
-        }
         Request::ActivateStatus {
             service,
             path,
@@ -726,8 +554,11 @@ fn handle(
         | Request::ForgetRegistrations(_)
         | Request::FetchDbusMenu(_)
         | Request::ReleaseDbusMenu(_)
-        | Request::AboutToShow { .. } => {
-            unreachable!("the worker's loop handles the registrar and the followed menus")
+        | Request::AboutToShow { .. }
+        | Request::FetchGtk(_)
+        | Request::ReleaseGtk(_)
+        | Request::ActivateGtk { .. } => {
+            unreachable!("the worker's loop handles the registrar, the followed menus and the GMenuModel exporters")
         }
     }
 }
